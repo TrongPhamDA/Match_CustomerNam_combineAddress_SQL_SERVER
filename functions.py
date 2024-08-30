@@ -5,10 +5,12 @@ import sql_user.sql_user_login as login
 import math
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
-
-
 import numpy as np
 from unidecode import unidecode
+import re
+
+import os
+from openpyxl import load_workbook
 
 def distance_km(latA, longA, latB, longB):
     """
@@ -113,6 +115,31 @@ def remove_special_characters(text):
         return re.sub(r'[^a-zA-Z0-9\s]', '', text)
     return str(text)  # Chuyển đổi giá trị không phải chuỗi thành chuỗi
 
+
+def remove_unwanted_words(text):
+    """
+    Loại bỏ các từ không cần thiết từ chuỗi đầu vào nếu các từ đó đứng riêng biệt.
+    
+    :param text: Chuỗi văn bản cần xử lý.
+    :return: Chuỗi văn bản sau khi loại bỏ các từ không cần thiết.
+    """
+    # Danh sách các từ cần bỏ
+    words_to_remove = [
+        'tinh', 'thanh pho', 'thi xa', 'thi tran', 'huyen', 'quan',
+        'phuong', 'xa', 'thon', 'ap', 'duong', 'so', 'tinh lo',
+        'quoc lo', 'so nha', 'duong so', 'tt', 'tx', 'tp', 'h', 'p', 'q', 'x'
+    ]
+    
+    # Tạo biểu thức chính quy cho các từ cần bỏ, đảm bảo rằng từ phải đứng riêng biệt
+    pattern = r'\b(?:' + '|'.join(map(re.escape, words_to_remove)) + r')\b'
+    
+    # Loại bỏ các từ không cần thiết
+    cleaned_text = re.sub(pattern, '', text, flags=re.IGNORECASE)
+    
+    # Xóa khoảng trắng thừa và trả về kết quả
+    return ' '.join(cleaned_text.split())
+
+
 def preprocess_text(text):
     """
     Chuyển đổi ký tự Unicode sang ASCII và loại bỏ ký tự đặc biệt.
@@ -123,7 +150,7 @@ def preprocess_text(text):
     Returns:
         str: Chuỗi đã được xử lý.
     """
-    return remove_special_characters(unicode_convert_to_ascii(text))
+    return remove_unwanted_words(remove_special_characters(unicode_convert_to_ascii(text)))
 
 
 def query_exportExcel(sql_file_path: str, output_file: str, sheet_name: str):
@@ -168,3 +195,93 @@ def query_exportExcel(sql_file_path: str, output_file: str, sheet_name: str):
     finally:
         engine.dispose()
         print("Đã đóng kết nối.")
+
+def levenshtein_distance(s1, s2):
+    """Tính khoảng cách Levenshtein giữa hai chuỗi s1 và s2."""
+    len_s1, len_s2 = len(s1), len(s2)
+    
+    # Tạo bảng khoảng cách
+    dp = [[0] * (len_s2 + 1) for _ in range(len_s1 + 1)]
+    
+    # Khởi tạo bảng
+    for i in range(len_s1 + 1):
+        dp[i][0] = i
+    for j in range(len_s2 + 1):
+        dp[0][j] = j
+    
+    # Tính toán khoảng cách Levenshtein
+    for i in range(1, len_s1 + 1):
+        for j in range(1, len_s2 + 1):
+            cost = 0 if s1[i - 1] == s2[j - 1] else 1
+            dp[i][j] = min(dp[i - 1][j] + 1,      # Xóa
+                           dp[i][j - 1] + 1,      # Thêm
+                           dp[i - 1][j - 1] + cost)  # Thay thế
+    
+    return dp[len_s1][len_s2]
+
+
+def write_toExcel_logfile(output_log_file, input_row, df_ref_temp, closest_distance_km):
+    """
+    Ghi log vào file Excel. Nếu file đã tồn tại thì ghi tiếp, nếu chưa thì tạo file mới.
+    Tên sheet được giữ nguyên là "output_log".
+    
+    :param output_log_file: Đường dẫn đến file log.
+    :param input_row: Dữ liệu từ input cần ghi log.
+    :param df_ref_temp: Dữ liệu từ DataFrame reference cần ghi log (có thể chứa nhiều records).
+    :param closest_distance_km: Khoảng cách gần nhất cần ghi log.
+    """
+    # Nếu file chưa tồn tại, tạo file mới với các cột cụ thể
+    if not os.path.exists(output_log_file):
+        # Các cột cần ghi
+        columns = [
+            'ROW_NO', 'CUSTOMER_NAME', 'CUSTOMER_ADDRESS', 'CUSTOMER_LAT', 'CUSTOMER_LONG', 'CUSTOMER_CODE', 
+            'REF_CUSTOMER_NAME', 'REF_CUSTOMER_ADDRESS', 'MATCH_DISTANCE_KM', 'SEARCH_NAME_FIXED', 
+            'SEARCH_ADDRESS_FIXED', 'SEARCH_COMBINE_FIXED', 'MATCH_NAME_SCORE', 'MATCH_NAME_SCORE_2',
+            'MATCH_ADDRESS_SCORE', 'MATCH_COMBINE_SCORE', 'MATCH_FINAL_SCORE', 'CLOSEST_DISTANCE_KM'
+        ]
+        
+        # Tạo file Excel với DataFrame trống có các cột và sheet name là "output_log"
+        pd.DataFrame(columns=columns).to_excel(output_log_file, index=False, sheet_name='output_log')
+
+    # Chuẩn bị dữ liệu để ghi
+    records = []
+    for _, row in df_ref_temp.iterrows():
+        record = {
+            'ROW_NO': input_row['ROW_NO'],
+            'CUSTOMER_NAME': input_row['CUSTOMER_NAME'],
+            'CUSTOMER_ADDRESS': input_row['CUSTOMER_ADDRESS'],
+            'CUSTOMER_LAT': input_row['CUSTOMER_LAT'],
+            'CUSTOMER_LONG': input_row['CUSTOMER_LONG'],
+            'CUSTOMER_CODE': row['CUSTOMER_CODE'],
+            'REF_CUSTOMER_NAME': row['CUSTOMER_NAME'],
+            'REF_CUSTOMER_ADDRESS': row['CUSTOMER_ADDRESS'],
+            'MATCH_DISTANCE_KM': row['MATCH_DISTANCE_KM'],
+            'SEARCH_NAME_FIXED': row['SEARCH_NAME_FIXED'],
+            'SEARCH_ADDRESS_FIXED': row['SEARCH_ADDRESS_FIXED'],
+            'SEARCH_COMBINE_FIXED': row['SEARCH_COMBINE_FIXED'],
+            'MATCH_NAME_SCORE': row['MATCH_NAME_SCORE'],
+            'MATCH_NAME_SCORE_2': row['MATCH_NAME_SCORE_2'],
+            'MATCH_ADDRESS_SCORE': row['MATCH_ADDRESS_SCORE'],
+            'MATCH_COMBINE_SCORE': row['MATCH_COMBINE_SCORE'],
+            'MATCH_FINAL_SCORE': row['MATCH_FINAL_SCORE'],
+            'CLOSEST_DISTANCE_KM': closest_distance_km
+        }
+        records.append(record)
+    
+    # Convert records thành DataFrame để append vào file log
+    log_df = pd.DataFrame(records)
+    
+    # Sử dụng openpyxl để mở file và append dữ liệu
+    if os.path.exists(output_log_file):
+        book = load_workbook(output_log_file)
+        writer = pd.ExcelWriter(output_log_file, engine='openpyxl', mode='a', if_sheet_exists='overlay')
+        writer.book = book
+        sheet = book['output_log']
+        startrow = sheet.max_row
+        log_df.to_excel(writer, sheet_name='output_log', index=False, header=False, startrow=startrow)
+    else:
+        log_df.to_excel(output_log_file, sheet_name='output_log', index=False)
+    
+    # Lưu và đóng writer
+    writer.save()
+    writer.close()
