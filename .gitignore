@@ -3,3 +3,7 @@ __pycache__/function.cpython-39.pyc
 __pycache__/function_2.cpython-39.pyc
 __pycache__/functions.cpython-39.pyc
 sql_user/sql_user_login.py
+__pycache__/
+.mypy_cache/
+sql_user\__pycache__/
+sql_user\.mypy_cache
